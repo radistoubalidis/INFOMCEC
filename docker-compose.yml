@@ -50,6 +50,20 @@ services:
     networks:
       - cec-assignment-group6
 
+  observability-api:
+    build: ./observability-api
+    container_name: observability-api
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: "postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:${POSTGRES_PORT}/${POSTGRES_DB}"
+    depends_on:
+      - postgres
+    volumes:
+      - ./observability-api/src:/app
+    networks:
+      - cec-assignment-group6
+
   adminer:
     image: adminer:5
     restart: unless-stopped
