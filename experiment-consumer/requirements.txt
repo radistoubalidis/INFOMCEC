@@ -1,0 +1,6 @@
+confluent-kafka==2.2.0
+click==8.0.3
+avro==1.12.0
+psycopg[binary]
+pydantic
+sqlalchemy
