@@ -1,7 +1,7 @@
 import os
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Query
 from psycopg_pool import ConnectionPool
 
 DATABASE_URL = os.environ["DATABASE_URL"]
@@ -40,3 +40,22 @@ This is an example on how to run queries
 def db_version(request: Request):
     row = request.state.conn.execute("SELECT version()").fetchone()
     return {"version": row[0]}
+
+@app.get("/temperature/out-of-range")
+def out_of_range(request: Request, experiment_id: str=Query(alias="experiment-id")):
+    payload = request.state.conn.execute(
+        "SELECT payload FROM events WHERE event_name='ExperimentConfig' AND experiment_id=%s ", 
+        (experiment_id,),).fetchall()
+    upper_threshold = payload[0][0]["temperature_range"]["upper_threshold"]
+    lower_threshold = payload[0][0]["temperature_range"]["lower_threshold"]
+
+    started_timestamp = request.state.conn.execute(
+        "SELECT timestamp FROM events WHERE event_name='experiment_started' AND experiment_id=%s ORDER BY timestamp ASC LIMIT 1", 
+        (experiment_id,),).fetchone()[0]
+
+    data = request.state.conn.execute(
+        "SELECT timestamp, avg(temperature) FROM events where event_name='sensor_temperature_measured' AND experiment_id = %s AND timestamp > %s GROUP BY timestamp HAVING avg(temperature) < %s OR avg(temperature) > %s ORDER BY timestamp",
+    (experiment_id, started_timestamp, lower_threshold, upper_threshold),).fetchall()
+    return [{"timestamp": timestamp.timestamp(), "temperature": temperature} for timestamp, temperature in data]
+
+
