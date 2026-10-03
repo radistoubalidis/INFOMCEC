@@ -54,8 +54,18 @@ def out_of_range(request: Request, experiment_id: str=Query(alias="experiment-id
         (experiment_id,),).fetchone()[0]
 
     data = request.state.conn.execute(
-        "SELECT timestamp, avg(temperature) FROM events where event_name='sensor_temperature_measured' AND experiment_id = %s AND timestamp > %s GROUP BY timestamp HAVING avg(temperature) < %s OR avg(temperature) > %s ORDER BY timestamp",
+        "SELECT timestamp, avg(temperature) FROM events WHERE event_name='sensor_temperature_measured' AND experiment_id = %s AND timestamp > %s GROUP BY timestamp HAVING avg(temperature) < %s OR avg(temperature) > %s ORDER BY timestamp",
     (experiment_id, started_timestamp, lower_threshold, upper_threshold),).fetchall()
     return [{"timestamp": timestamp.timestamp(), "temperature": temperature} for timestamp, temperature in data]
 
 
+@app.get("/temperature")
+def temperature(request: Request, experiment_id: str=Query(alias="experiment-id"), start_time: float=Query(alias="start-time"), end_time: float=Query(alias="end-time")):
+    experiment_started = request.state.conn.execute(
+        "SELECT timestamp FROM events WHERe event_name='experiment_started' AND experiment_id=%s ORDER by timestamp ASC LIMIT 1",
+       (experiment_id,),).fetchone()[0]
+
+    data = request.state.conn.execute(
+        "SELECT timestamp, avg(temperature) FROM events WHERE experiment_id=%s AND event_name='sensor_temperature_measured' AND timestamp > %s AND timestamp BETWEEN to_timestamp(%s) AND to_timestamp(%s) GROUP BY timestamp ORDER BY timestamp",
+        (experiment_id, experiment_started, start_time, end_time),).fetchall()
+    return [{"timestamp": timestamp.timestamp(), "temperature": temperature} for timestamp, temperature in data]
