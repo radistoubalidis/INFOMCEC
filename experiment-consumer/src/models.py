@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import requests
 from datetime import datetime, timezone
 from typing import Annotated, Literal, Union
 from uuid import UUID
@@ -65,12 +66,16 @@ class SensorTemperatureMeasuredEvent(_Base):
     name: Literal["sensor_temperature_measured"]
     data: SensorTemperatureData
 
+class ExperimentTerminatedEvent(_Base):
+    name: Literal["experiment_terminated"]
+    data: ExperimentTimestamped
 
 Event = Annotated[
     Union[
         ExperimentConfigEvent,
-        ExperimentStartedEvent,
         StabilizationStartedEvent,
+        ExperimentStartedEvent,
+        ExperimentTerminatedEvent,
         SensorTemperatureMeasuredEvent,
     ],
     Field(discriminator="name"),
@@ -82,6 +87,28 @@ event_adapter = TypeAdapter(Event)
 class Base(DeclarativeBase):
     pass
 
+EVENT_PHASE = {
+    1: "ExperimentConfig",
+    2: "stabilization_started",
+    3: "experiment_started",
+    4: "experiment_terminated",
+}
+
+pending = {}
+was_in_range = {}
+
+
+class ExperimentState(Base):
+    __tablename__ = "experiment_states"
+
+    experiment_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    phase: Mapped[int] = mapped_column(String(320))
+    researcher: Mapped[str | None] = mapped_column(String(320))
+    sensors: Mapped[list | None] = mapped_column(JSON)
+    lower_threshold: Mapped[float | None] = mapped_column(Float)
+    upper_threshold: Mapped[float | None] = mapped_column(Float)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    terminated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 class EventRow(Base):
     __tablename__ = "events"
@@ -123,13 +150,83 @@ def to_row(ev) -> EventRow:
         event_key=key,
     )
 
+def _advance_state(session: Session, state, ev) -> None:
+    d = ev.data
+    if state is None:
+        state = ExperimentState(experiment_id=str(d.experiment))
+        session.add(state)
+    if ev.name == EVENT_PHASE[1]:
+        state.phase = EVENT_PHASE[1]
+        state.researcher = d.researcher
+        state.sensors = [str(s) for s in d.sensors]
+        state.lower_threshold = d.temperature_range.lower_threshold
+        state.upper_threshold = d.temperature_range.upper_threshold
+    elif ev.name == EVENT_PHASE[2]:
+        state.phase = EVENT_PHASE[2]
+    elif state.phase != EVENT_PHASE[3] and ev.name == EVENT_PHASE[3]:
+        state.phase = EVENT_PHASE[3]
+        state.started_at = d.timestamp
+    elif state.phase == EVENT_PHASE[3] and ev.name == EVENT_PHASE[3] and (hasattr(d, 'experiment') and hasattr(d, 'timestamp')):
+        # for some reason for the last event of an experient the event schema has name experiment_started and body like [{'experiment': '3ab4a42a-f0a7-4eec-b2fc-41cfbc761255', 'timestamp': 1791223630.5652282}]
+        state.phase = EVENT_PHASE[4]
+        state.terminated_at = d.timestamp
 
-# ---------- 3. Insert (idempotent) ----------
+
+
 def save_event(session: Session, raw: dict) -> bool:
-    """Validate and insert one decoded record. Returns False if it was a duplicate."""
-    row = to_row(event_adapter.validate_python(raw))
+    """Validate and store one event. Returns False if ignored or duplicate."""
+    ev = event_adapter.validate_python(raw)
+    state = session.get(ExperimentState, str(ev.data.experiment))
+
+    # Only run-phase measurements are stored (README: stabilization is not).
+    if ev.name == "sensor_temperature_measured":
+        if state is None or state.phase != EVENT_PHASE[3]:
+            return False
+        check_temp(raw['data'], state, session)
+
+    row = to_row(ev)
     if session.scalar(select(EventRow.id).where(EventRow.event_key == row.event_key)):
         return False
     session.add(row)
+
+    _advance_state(session, state, ev)
     session.flush()
     return True
+
+def check_temp(event: dict, state: ExperimentState, session: Session):
+    if state is None or state.phase != EVENT_PHASE[3]:
+        return None
+    if not state.sensors or state.lower_threshold is None:
+        return None
+
+    exp_id = state.experiment_id
+    key = (exp_id, event['timestamp'])
+    entry = pending.setdefault(key, {
+        "temps": {},
+        "measurement_id": str(event['measurement_id']),
+        "hash": event['measurement_hash'],
+    })
+    entry["temps"][str(event['sensor'])] = event['temperature']
+
+    expected = set(state.sensors)
+    if not expected.issubset(entry["temps"]):
+        return None  # still waiting for other sensors at this timestamp
+    del pending[key]
+
+    avg = sum(entry["temps"][s] for s in expected) / len(expected)
+    inside = state.lower_threshold <= avg <= state.upper_threshold
+    previously_inside = was_in_range.get(exp_id, True)
+    was_in_range[exp_id] = inside
+
+    if inside or not previously_inside:
+        return None  # in range, or already notified for this excursion
+
+    notification_data = {
+        "notification_type": "OutOfRange",
+        "researcher": state.researcher,
+        "experiment_id": exp_id,
+        "measurement_id": entry["measurement_id"],
+        "cipher_data": entry["hash"],
+    }
+    print(notification_data, avg)
+    

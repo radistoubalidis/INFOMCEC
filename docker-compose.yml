@@ -77,6 +77,22 @@ services:
     networks:
       - cec-assignment-group6
 
+  notifications-api:
+    image: dclandau/cec-notifications-service
+    container_name: notifications-api
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    depends_on:
+      - experiment-consumer
+    networks:
+      - cec-assignment-group6
+    command: 
+      - "--secret-key"
+      - "${NOTIFICATIONS_SECRET_KEY}"
+      - "--external-ip"
+      - "localhost"
+
 networks:
   cec-assignment-group6:
     driver: bridge

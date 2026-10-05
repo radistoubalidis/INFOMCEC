@@ -12,7 +12,7 @@ from pydantic import ValidationError
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
-from models import Base, save_event
+from models import Base, save_event, check_temp
 
 TOPIC = os.environ['TOPIC']
 SSL_LOCATION = os.environ['SSL_CA_LOCATION']
@@ -30,19 +30,25 @@ def deserialize(msg):
     """Decode one Kafka message (an Avro container file) into event dicts."""
     reader = DataFileReader(io.BytesIO(msg.value()), DatumReader())
     try:
-        schema_name = json.loads(reader.meta.get('avro.schema').decode('utf-8'))['name']
+        schema = json.loads(reader.meta.get('avro.schema').decode('utf-8'))
+        schema_name = schema['name']
         return [{'name': schema_name, 'data': record} for record in reader]
     finally:
         reader.close()
+    
 
 
 def store(events):
-    """Validate and insert all events of one message in a single transaction."""
+    """Insert the events of one message; invalid events are skipped individually."""
     inserted = 0
     with Session(engine) as session:
         try:
             for event in events:
-                inserted += save_event(session, event)
+                try:
+                    with session.begin_nested():
+                        inserted += save_event(session, event)
+                except ValidationError as e:
+                    print(f"Skipping invalid event {event.get('name')}: {e}")
             session.commit()
         except Exception:
             session.rollback()
@@ -88,8 +94,8 @@ def consume(topic: str = TOPIC):
                 continue
 
             try:
-                inserted = store(deserialize(msg))
-                print(f"offset {msg.offset()}: inserted {inserted} new event(s)")
+                obj = deserialize(msg)
+                inserted = store(obj)
             except ValidationError as e:
                 print(f"Skipping invalid message at offset {msg.offset()}: {e}")
             c.commit(message=msg, asynchronous=False)
