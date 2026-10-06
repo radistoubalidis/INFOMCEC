@@ -1,6 +1,6 @@
 [
     {
-        "start_time": 0,
+        "start_time":30,
         "researcher": "d.landau@uu.nl",
         "num_sensors": 10,
         "sample_rate": 1000,
@@ -13,7 +13,7 @@
         }
     },
     {
-        "start_time": 30,
+        "start_time": 100,
         "researcher": "d.landau@uu.nl",
         "num_sensors": 8,
         "sample_rate": 200,
@@ -26,7 +26,7 @@
         }
     },
     {
-        "start_time": 45,
+        "start_time": 150,
         "researcher": "d.landau@uu.nl",
         "num_sensors": 20,
         "sample_rate": 500,
