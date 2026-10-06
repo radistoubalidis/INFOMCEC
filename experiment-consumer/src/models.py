@@ -96,7 +96,7 @@ EVENT_PHASE = {
 
 pending = {}
 was_in_range = {}
-
+stabilized_notified = {}
 
 class ExperimentState(Base):
     __tablename__ = "experiment_states"
@@ -180,7 +180,7 @@ def save_event(session: Session, raw: dict) -> bool:
 
     # Only run-phase measurements are stored (README: stabilization is not).
     if ev.name == "sensor_temperature_measured":
-        if state is None or state.phase != EVENT_PHASE[3]:
+        if state is None or state.phase not in (EVENT_PHASE[2], EVENT_PHASE[3]):   # CHANGED #
             return False
         check_temp(raw['data'], state, session)
 
@@ -194,39 +194,77 @@ def save_event(session: Session, raw: dict) -> bool:
     return True
 
 def check_temp(event: dict, state: ExperimentState, session: Session):
-    if state is None or state.phase != EVENT_PHASE[3]:
+    if state is None or state.phase not in (EVENT_PHASE[2], EVENT_PHASE[3]):
         return None
+
     if not state.sensors or state.lower_threshold is None:
         return None
 
     exp_id = state.experiment_id
     key = (exp_id, event['timestamp'])
+
     entry = pending.setdefault(key, {
         "temps": {},
         "measurement_id": str(event['measurement_id']),
         "hash": event['measurement_hash'],
     })
+
     entry["temps"][str(event['sensor'])] = event['temperature']
 
     expected = set(state.sensors)
+
     if not expected.issubset(entry["temps"]):
         return None  # still waiting for other sensors at this timestamp
+
     del pending[key]
 
     avg = sum(entry["temps"][s] for s in expected) / len(expected)
     inside = state.lower_threshold <= avg <= state.upper_threshold
+
+    # Stabilization 
+    if state.phase == EVENT_PHASE[2]:
+        if inside and not stabilized_notified.get(exp_id, False):
+            stabilized_notified[exp_id] = True
+
+            notification_data = {
+                "notification_type": "Stabilized",
+                "researcher": state.researcher,
+                "experiment_id": exp_id,
+                "measurement_id": entry["measurement_id"],
+                "cipher_data": entry["hash"],
+            }
+
+            ntf_url = "http://notifications-api:3000/api/notify"
+
+            response = requests.post(
+                url=ntf_url,
+                json=notification_data
+            )
+            print("Stabilization Notification! ",notification_data["measurement_id"])
+            #print("Notification response:", response.status_code, response.text)
+
+        return None
+
+    # Experiment 
     previously_inside = was_in_range.get(exp_id, True)
     was_in_range[exp_id] = inside
 
-    if inside or not previously_inside:
-        return None  # in range, or already notified for this excursion
+    if not inside and previously_inside:
+        notification_data = {
+            "notification_type": "OutOfRange",
+            "researcher": state.researcher,
+            "experiment_id": exp_id,
+            "measurement_id": entry["measurement_id"],
+            "cipher_data": entry["hash"],
+        }
 
-    notification_data = {
-        "notification_type": "OutOfRange",
-        "researcher": state.researcher,
-        "experiment_id": exp_id,
-        "measurement_id": entry["measurement_id"],
-        "cipher_data": entry["hash"],
-    }
-    print(notification_data, avg)
-    
+        ntf_url = "http://notifications-api:3000/api/notify"
+
+        response = requests.post(
+            url=ntf_url,
+            json=notification_data
+        )
+        print("Out of Range Notification!", notification_data["measurement_id"])
+        #print("Notification Response:", response.status_code, response.text)
+    # print(notification_data, avg)
+ 
