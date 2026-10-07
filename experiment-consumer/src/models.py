@@ -8,7 +8,7 @@ from uuid import UUID
 import os
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator
-from sqlalchemy import JSON, DateTime, Float, Index, String, UniqueConstraint, create_engine, func, select
+from sqlalchemy import JSON, DateTime, Float, Index, String, UniqueConstraint, create_engine, func, select, Boolean
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
 
@@ -134,6 +134,21 @@ class EventRow(Base):
         Index("ix_events_exp_name_ts", "experiment_id", "event_name", "timestamp"),
     )
 
+class TemperatureAverage(Base):
+    __tablename__ = "temperature_averages"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    experiment_id: Mapped[str] = mapped_column(String(36))
+    timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    measurement_id: Mapped[str] = mapped_column(String(36))
+    temperature: Mapped[float] = mapped_column(Float)
+    in_range: Mapped[bool] = mapped_column(Boolean)
+
+    __table_args__ = (
+        UniqueConstraint("experiment_id", "timestamp", name="uq_avg_exp_ts"),
+        Index("ix_avg_exp_ts", "experiment_id", "timestamp"),
+    )
+
 
 def to_row(ev) -> EventRow:
     d = ev.data
@@ -178,89 +193,83 @@ def _advance_state(session: Session, state, ev) -> None:
 
 
 def save_event(session: Session, raw: dict) -> bool:
-    """Validate and store one event. Returns False if ignored or duplicate."""
     ev = event_adapter.validate_python(raw)
     state = session.get(ExperimentState, str(ev.data.experiment))
 
-    # Only run-phase measurements are stored (README: stabilization is not).
     if ev.name == "sensor_temperature_measured":
-        if state is None or state.phase not in (EVENT_PHASE[2], EVENT_PHASE[3]):   # CHANGED #
+        if state is None:
             return False
-        check_temp(raw['data'], state, session)
+        return check_temp(raw['data'], state, session)
 
     row = to_row(ev)
     if session.scalar(select(EventRow.id).where(EventRow.event_key == row.event_key)):
         return False
     session.add(row)
-
     _advance_state(session, state, ev)
     session.flush()
     return True
 
-def check_temp(event: dict, state: ExperimentState, session: Session):
-    if state is None or state.phase not in (EVENT_PHASE[2], EVENT_PHASE[3]):
-        return None
+def _notify(kind, state, entry):
+    payload = {
+        "notification_type": kind,
+        "researcher": state.researcher,
+        "experiment_id": state.experiment_id,
+        "measurement_id": entry["measurement_id"],
+        "cipher_data": entry["hash"],
+    }
+    try:
+        r = requests.post(url=ntf_url, json=payload, timeout=3)
+        print(kind, r.status_code, r.content)
+    except requests.RequestException as e:
+        print(f"Notification failed ({kind}): {e}")
 
+
+def check_temp(event: dict, state: ExperimentState, session: Session) -> bool:
+    if state.phase not in (EVENT_PHASE[2], EVENT_PHASE[3]):
+        return False
     if not state.sensors or state.lower_threshold is None:
-        return None
+        return False
 
     exp_id = state.experiment_id
     key = (exp_id, event['timestamp'])
-
     entry = pending.setdefault(key, {
         "temps": {},
         "measurement_id": str(event['measurement_id']),
         "hash": event['measurement_hash'],
     })
-
     entry["temps"][str(event['sensor'])] = event['temperature']
 
     expected = set(state.sensors)
-
     if not expected.issubset(entry["temps"]):
-        return None  # still waiting for other sensors at this timestamp
-
+        return False
     del pending[key]
 
     avg = sum(entry["temps"][s] for s in expected) / len(expected)
     inside = state.lower_threshold <= avg <= state.upper_threshold
 
-    # Stabilization 
-    if state.phase == EVENT_PHASE[2]:
+    if state.phase == EVENT_PHASE[2]:  # stabilization: notify, don't store
         if inside and not stabilized_notified.get(exp_id, False):
             stabilized_notified[exp_id] = True
+            _notify("Stabilized", state, entry)
+        return False
 
-            notification_data = {
-                "notification_type": "Stabilized",
-                "researcher": state.researcher,
-                "experiment_id": exp_id,
-                "measurement_id": entry["measurement_id"],
-                "cipher_data": entry["hash"],
-            }
+    ts = datetime.fromtimestamp(event['timestamp'], tz=timezone.utc)
+    exists = session.scalar(
+        select(TemperatureAverage.id).where(
+            TemperatureAverage.experiment_id == exp_id,
+            TemperatureAverage.timestamp == ts,
+        )
+    )
+    if exists:
+        return False
+    session.add(TemperatureAverage(
+        experiment_id=exp_id, timestamp=ts,
+        measurement_id=entry["measurement_id"],
+        temperature=avg, in_range=inside,
+    ))
 
-            response = requests.post(
-                url=ntf_url,
-                json=notification_data
-            )
-            print('Stab', response.status_code, response.content)
-
-        return None
-
-    # Experiment 
     previously_inside = was_in_range.get(exp_id, True)
     was_in_range[exp_id] = inside
-
     if not inside and previously_inside:
-        notification_data = {
-            "notification_type": "OutOfRange",
-            "researcher": state.researcher,
-            "experiment_id": exp_id,
-            "measurement_id": entry["measurement_id"],
-            "cipher_data": entry["hash"],
-        }
-
-        response = requests.post(
-            url=ntf_url,
-            json=notification_data
-        )
-        print('Not',response.status_code, response.content)
+        _notify("OutOfRange", state, entry)
+    return True
