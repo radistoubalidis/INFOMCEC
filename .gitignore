@@ -2,3 +2,4 @@ auth
 .env
 __pycache__
 db/
+test.json
