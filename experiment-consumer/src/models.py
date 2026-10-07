@@ -98,6 +98,9 @@ EVENT_PHASE = {
 pending = {}
 was_in_range = {}
 stabilized_notified = {}
+with open('/usr/src/auth/token') as f:
+        token = f.read()
+ntf_url = f"{os.environ['NOTIFICATIONS_URL']}?{token}"
 
 class ExperimentState(Base):
     __tablename__ = "experiment_states"
@@ -223,48 +226,41 @@ def check_temp(event: dict, state: ExperimentState, session: Session):
     inside = state.lower_threshold <= avg <= state.upper_threshold
 
     # Stabilization 
-    # if state.phase == EVENT_PHASE[2]:
-    #     if inside and not stabilized_notified.get(exp_id, False):
-    #         stabilized_notified[exp_id] = True
+    if state.phase == EVENT_PHASE[2]:
+        if inside and not stabilized_notified.get(exp_id, False):
+            stabilized_notified[exp_id] = True
 
-    #         notification_data = {
-    #             "notification_type": "Stabilized",
-    #             "researcher": state.researcher,
-    #             "experiment_id": exp_id,
-    #             "measurement_id": entry["measurement_id"],
-    #             "cipher_data": entry["hash"],
-    #         }
+            notification_data = {
+                "notification_type": "Stabilized",
+                "researcher": state.researcher,
+                "experiment_id": exp_id,
+                "measurement_id": entry["measurement_id"],
+                "cipher_data": entry["hash"],
+            }
 
-    #         ntf_url = "http://notifications-api:3000/api/notify"
+            response = requests.post(
+                url=ntf_url,
+                json=notification_data
+            )
+            print('Stab', response.status_code, response.content)
 
-    #         response = requests.post(
-    #             url=ntf_url,
-    #             json=notification_data
-    #         )
-    #         print("Stabilization Notification! ",notification_data["measurement_id"])
-
-    #     return None
+        return None
 
     # Experiment 
     previously_inside = was_in_range.get(exp_id, True)
     was_in_range[exp_id] = inside
 
-    if inside and not previously_inside:
-        return None
-        
-    
-    notification_data = {
-        "notification_type": "OutOfRange",
-        "researcher": state.researcher,
-        "experiment_id": exp_id,
-        "measurement_id": entry["measurement_id"],
-        "cipher_data": entry["hash"],
-    }
-    with open('/usr/src/auth/token') as f:
-        token = f.read()
-    ntf_url = f"{os.environ['NOTIFICATIONS_URL']}?{token}"
-    response = requests.post(
-        url=ntf_url,
-        json=notification_data
-    )
-    print(response.json(), response.status_code)
+    if not inside and previously_inside:
+        notification_data = {
+            "notification_type": "OutOfRange",
+            "researcher": state.researcher,
+            "experiment_id": exp_id,
+            "measurement_id": entry["measurement_id"],
+            "cipher_data": entry["hash"],
+        }
+
+        response = requests.post(
+            url=ntf_url,
+            json=notification_data
+        )
+        print('Not',response.status_code, response.content)
