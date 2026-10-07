@@ -1,7 +1,7 @@
 import os
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request, Query
+from fastapi import FastAPI, Request, Query, HTTPException
 from psycopg_pool import ConnectionPool
 
 DATABASE_URL = os.environ["DATABASE_URL"]
@@ -46,15 +46,19 @@ def out_of_range(request: Request, experiment_id: str=Query(alias="experiment-id
     payload = request.state.conn.execute(
         "SELECT payload FROM events WHERE event_name='ExperimentConfig' AND experiment_id=%s ", 
         (experiment_id,),).fetchall()
+    if not payload:
+        raise HTTPException(status_code=404, detail=f"ExperimentConfig not found for exp {experiment_id}")
     upper_threshold = payload[0][0]["temperature_range"]["upper_threshold"]
     lower_threshold = payload[0][0]["temperature_range"]["lower_threshold"]
 
     started_timestamp = request.state.conn.execute(
-        "SELECT timestamp FROM events WHERE event_name='experiment_started' AND experiment_id=%s ORDER BY timestamp ASC LIMIT 1", 
+        "SELECT min(timestamp) FROM events WHERE event_name='experiment_started' AND experiment_id=%s", 
         (experiment_id,),).fetchone()[0]
+    if started_timestamp is None:
+        raise HTTPException(status_code=404, detail=f"experiment_started not found for exp {experiment_id}")
 
     data = request.state.conn.execute(
-        "SELECT min(timestamp), avg(temperature) FROM events WHERE event_name='sensor_temperature_measured' AND experiment_id = %s AND timestamp > %s GROUP BY measurement_id HAVING avg(temperature) < %s OR avg(temperature) > %s ORDER BY min(timestamp)",
+        "SELECT timestamp, temperature FROM temperature_averages WHERE experiment_id = %s AND timestamp > %s AND (temperature < %s OR temperature > %s) ORDER BY timestamp",
     (experiment_id, started_timestamp, lower_threshold, upper_threshold),).fetchall()
     return [{"timestamp": timestamp.timestamp(), "temperature": temperature} for timestamp, temperature in data]
 
@@ -64,11 +68,11 @@ def temperature(request: Request, experiment_id: str=Query(alias="experiment-id"
     row = request.state.conn.execute(
         "SELECT min(timestamp) FROM events WHERE event_name='experiment_started' AND experiment_id=%s",
         (experiment_id,),).fetchone()
-    experiment_started = row[0] if row else None
-    if experiment_started is None:
-        return []
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"experiment_started not found for exp {experiment_id}")
+    experiment_started = row[0] 
 
     data = request.state.conn.execute(
-        "SELECT min(timestamp), avg(temperature) FROM events WHERE experiment_id=%s AND event_name='sensor_temperature_measured' AND timestamp > %s AND timestamp BETWEEN to_timestamp(%s) AND to_timestamp(%s) GROUP BY measurement_id ORDER BY min(timestamp)",
+        "SELECT timestamp, temperature FROM temperature_averages WHERE experiment_id=%s AND timestamp > %s AND timestamp BETWEEN to_timestamp(%s) AND to_timestamp(%s) ORDER BY timestamp",
         (experiment_id, experiment_started, start_time, end_time),).fetchall()
     return [{"timestamp": timestamp.timestamp(), "temperature": temperature} for timestamp, temperature in data]
