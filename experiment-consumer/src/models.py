@@ -99,8 +99,8 @@ pending = {}
 was_in_range = {}
 stabilized_notified = {}
 with open('/usr/src/auth/token') as f:
-        token = f.read()
-ntf_url = f"{os.environ['NOTIFICATIONS_URL']}?{token}"
+        token = f.read().strip()
+ntf_url = f"{os.environ['NOTIFICATIONS_URL']}?token={token}"
 
 class ExperimentState(Base):
     __tablename__ = "experiment_states"
