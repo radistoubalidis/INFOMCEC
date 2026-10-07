@@ -260,7 +260,7 @@ def check_temp(event: dict, state: ExperimentState, session: Session):
         "measurement_id": entry["measurement_id"],
         "cipher_data": entry["hash"],
     }
-    with open('auth/token') as f:
+    with open('/usr/src/auth/token') as f:
         token = f.read()
     ntf_url = f"{os.environ['NOTIFICATIONS_URL']}?{token}"
     response = requests.post(
