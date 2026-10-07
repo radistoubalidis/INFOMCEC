@@ -43,32 +43,32 @@ def db_version(request: Request):
 
 @app.get("/temperature/out-of-range")
 def out_of_range(request: Request, experiment_id: str=Query(alias="experiment-id")):
-    payload = request.state.conn.execute(
-        "SELECT payload FROM events WHERE event_name='ExperimentConfig' AND experiment_id=%s ", 
-        (experiment_id,),).fetchall()
-    if not payload:
-        raise HTTPException(status_code=404, detail=f"ExperimentConfig not found for exp {experiment_id}")
-    upper_threshold = payload[0][0]["temperature_range"]["upper_threshold"]
-    lower_threshold = payload[0][0]["temperature_range"]["lower_threshold"]
-
-    started_timestamp = request.state.conn.execute(
-        "SELECT min(timestamp) FROM events WHERE event_name='experiment_started' AND experiment_id=%s", 
-        (experiment_id,),).fetchone()[0]
-    if started_timestamp is None:
-        raise HTTPException(status_code=404, detail=f"experiment_started not found for exp {experiment_id}")
+    experiment = request.state.conn.execute(
+        "SELECT 1 FROM experiment_states WHERE experiment_id = %s",
+        (experiment_id,),
+    ).fetchone()
+    if experiment is None:
+        raise HTTPException(status_code=404, detail=f"Experiment not found: {experiment_id}")
 
     data = request.state.conn.execute(
-        "SELECT timestamp, temperature FROM temperature_averages WHERE experiment_id = %s AND timestamp > %s AND (temperature < %s OR temperature > %s) ORDER BY timestamp",
-    (experiment_id, started_timestamp, lower_threshold, upper_threshold),).fetchall()
+        "SELECT timestamp, temperature FROM temperature_averages WHERE experiment_id = %s AND in_range = FALSE ORDER BY timestamp",
+    (experiment_id,),).fetchall()
     return [{"timestamp": timestamp.timestamp(), "temperature": temperature} for timestamp, temperature in data]
 
 
 @app.get("/temperature")
 def temperature(request: Request, experiment_id: str=Query(alias="experiment-id"), start_time: float=Query(alias="start-time"), end_time: float=Query(alias="end-time")):
+    experiment = request.state.conn.execute(
+    "SELECT 1 FROM experiment_states WHERE experiment_id = %s",
+    (experiment_id,),
+    ).fetchone()
+    if experiment is None:
+        raise HTTPException(status_code=404, detail=f"Experiment not found: {experiment_id}")
+    
     row = request.state.conn.execute(
         "SELECT min(timestamp) FROM events WHERE event_name='experiment_started' AND experiment_id=%s",
         (experiment_id,),).fetchone()
-    if row is None:
+    if row is None or row[0] is None:
         raise HTTPException(status_code=404, detail=f"experiment_started not found for exp {experiment_id}")
     experiment_started = row[0] 
 
