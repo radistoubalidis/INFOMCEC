@@ -1,9 +1,0 @@
-FROM python:3.8
-
-WORKDIR /app
-
-RUN pip install requests
-
-COPY test-sender.py .
-
-ENTRYPOINT ["python3", "test-sender.py"] 

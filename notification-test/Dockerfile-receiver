@@ -1,9 +1,0 @@
-FROM python:3.8
-
-WORKDIR /app
-
-RUN pip install flask requests
-
-COPY receiver.py .
-
-ENTRYPOINT ["python3", "-u", "receiver.py"]
