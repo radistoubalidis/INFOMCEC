@@ -61,9 +61,12 @@ def out_of_range(request: Request, experiment_id: str=Query(alias="experiment-id
 
 @app.get("/temperature")
 def temperature(request: Request, experiment_id: str=Query(alias="experiment-id"), start_time: float=Query(alias="start-time"), end_time: float=Query(alias="end-time")):
-    experiment_started = request.state.conn.execute(
-        "SELECT timestamp FROM events WHERe event_name='experiment_started' AND experiment_id=%s ORDER by timestamp ASC LIMIT 1",
-       (experiment_id,),).fetchone()[0]
+    row = request.state.conn.execute(
+        "SELECT min(timestamp) FROM events WHERE event_name='experiment_started' AND experiment_id=%s",
+        (experiment_id,),).fetchone()
+    experiment_started = row[0] if row else None
+    if experiment_started is None:
+        return []
 
     data = request.state.conn.execute(
         "SELECT min(timestamp), avg(temperature) FROM events WHERE experiment_id=%s AND event_name='sensor_temperature_measured' AND timestamp > %s AND timestamp BETWEEN to_timestamp(%s) AND to_timestamp(%s) GROUP BY measurement_id ORDER BY min(timestamp)",
