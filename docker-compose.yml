@@ -119,7 +119,6 @@ services:
       MAX_ROWS: 10000000
       DELETE_FRACTION: 0.2
       CHECK_INTERVAL: 3600
-      DRY_RUN: 1
     volumes:
       - ./db-cleanup/cleanup.sh:/cleanup.sh:ro
       - ./db:/data:ro
