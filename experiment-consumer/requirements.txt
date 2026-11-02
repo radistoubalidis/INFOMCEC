@@ -5,3 +5,4 @@ psycopg[binary]
 pydantic
 sqlalchemy
 requests
+redis>=5,<6
