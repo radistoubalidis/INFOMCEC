@@ -104,6 +104,30 @@ services:
       - "--external-ip"
       - "localhost"
 
+  db-cleanup:
+    image: postgres:18
+    container_name: db-cleanup
+    restart: unless-stopped
+    logging: *default-logging
+    entrypoint: ["sh", "/cleanup.sh"]
+    environment:
+      PGHOST: postgres
+      PGPORT: ${POSTGRES_PORT}
+      PGUSER: ${POSTGRES_USER}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      PGDATABASE: ${POSTGRES_DB}
+      MAX_ROWS: 10000000
+      DELETE_FRACTION: 0.2
+      CHECK_INTERVAL: 3600
+      DRY_RUN: 1
+    volumes:
+      - ./db-cleanup/cleanup.sh:/cleanup.sh:ro
+      - ./db:/data:ro
+    depends_on:
+      - postgres
+    networks:
+      - cec-assignment-group6
+
 networks:
   cec-assignment-group6:
     driver: bridge
