@@ -1,8 +1,14 @@
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "5"
+
 services:
   experiment-consumer:
     build: ./experiment-consumer
     container_name: experiment-consumer
-    
+    logging: *default-logging
     env_file:
       - .env
     volumes:
@@ -15,6 +21,7 @@ services:
   experiment-producer:
     image: dclandau/cec-experiment-producer
     container_name: experiment-producer
+    logging: *default-logging
     volumes:
       - ./auth:/experiment-producer/auth
       - ./experiment-producer/experiment-producer.env:/experiment-producer/.env
@@ -33,6 +40,7 @@ services:
     image: postgres:18
     restart: unless-stopped
     container_name: experiment-db
+    logging: *default-logging
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -53,6 +61,7 @@ services:
   observability-api:
     build: ./observability-api
     container_name: observability-api
+    logging: *default-logging
     ports:
       - "3003:3003"
     environment:
@@ -68,6 +77,7 @@ services:
     image: adminer:5
     restart: unless-stopped
     container_name: pg-adminer
+    logging: *default-logging
     ports:
       - "127.0.0.1:8080:8080"
     environment:
@@ -80,6 +90,7 @@ services:
   notifications-api:
     image: dclandau/cec-notifications-service
     container_name: notifications-api
+    logging: *default-logging
     restart: unless-stopped
     ports:
       - "3000:3000"
