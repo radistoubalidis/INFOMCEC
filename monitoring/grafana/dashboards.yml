@@ -1,0 +1,7 @@
+# Tells Grafana to load every dashboard file in this folder at startup.
+apiVersion: 1
+providers:
+  - name: default
+    type: file
+    options:
+      path: /etc/grafana/dashboards
