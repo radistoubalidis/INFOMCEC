@@ -60,6 +60,7 @@ services:
       - cec-assignment-group6
 
   observability-api:
+    profiles: ["dev"]
     build: ./observability-api
     container_name: observability-api
     logging: *default-logging

@@ -9,9 +9,9 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade -r requirements.txt
 
 RUN useradd --create-home appuser
-COPY --chown=appuser:appuser ./src ./app
+COPY --chown=appuser:appuser ./src .
 USER appuser
 
-EXPOSE 8000
+EXPOSE 3003
 
 CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "3003", "--reload"]
