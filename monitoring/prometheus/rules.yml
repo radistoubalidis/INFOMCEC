@@ -1,0 +1,22 @@
+# Cost model:  cost per hour = CPU cores used x $0.04048  +  memory GB used x $0.004445
+# (roughly AWS Fargate prices per vCPU-hour and per GB-hour)
+# Each rule is calculated every 15 s and stored as its own metric, so the cost has a history.
+
+groups:
+  - name: cost
+    rules:
+      # CPU per container, in cores (1.0 = one full CPU core busy)
+      - record: container:cpu_cores
+        expr: sum by (name) (rate(container_cpu_usage_seconds_total{name!=""}[1m]))
+
+      # Memory per container, in GB
+      - record: container:memory_gb
+        expr: sum by (name) (container_memory_working_set_bytes{name!=""}) / 1024^3
+
+      # Cost per container, in USD per hour
+      - record: container:cost_usd_per_hour
+        expr: container:cpu_cores * 0.04048 + container:memory_gb * 0.004445
+
+      # Our microservice = only the containers we built (not the course's test tools or the monitoring)
+      - record: microservice:cost_usd_per_hour
+        expr: sum(container:cost_usd_per_hour{name=~"experiment-consumer|experiment-db|observability-api"})
