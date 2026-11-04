@@ -1,2 +1,0 @@
-redis>=5,<6
-requests>=2.32,<3

@@ -1,129 +1,112 @@
 import io
 import json
 import os
+import random
 import signal
+import sys
 
 from avro.datafile import DataFileReader
 from avro.io import DatumReader
-from confluent_kafka import Consumer
+from confluent_kafka import Consumer, KafkaException
 from pydantic import ValidationError
 from sqlalchemy import create_engine
-from sqlalchemy.engine import URL
 from sqlalchemy.orm import Session
 
-from models import Base, save_event
+from models import Base, save_event, check_temp
 
-
-TOPIC = os.environ["TOPIC"]
-
-# Require a stable group ID: replicas of this consumer must use the same value.
-GROUP_ID = os.environ["GROUP_ID"]
-
-DATABASE_URL = URL.create(
-    drivername="postgresql+psycopg",
-    username=os.environ["POSTGRES_USER"],
-    password=os.environ["POSTGRES_PASSWORD"],
-    host=os.environ.get("POSTGRES_HOST", "postgres"),
-    port=int(os.environ.get("POSTGRES_PORT", "5432")),
-    database=os.environ["POSTGRES_DB"],
-)
+TOPIC = os.environ['TOPIC']
+SSL_LOCATION = os.environ['SSL_CA_LOCATION']
+BOOTSTRAP_SERVERS = os.environ['BOOTSTRAP_SERVERS']
+SSL_KEYSTORE_LOC = os.environ['SSL_KEYSTORE_LOC']
+SSL_KEYSTORE_PASSWORD = os.environ['SSL_KEYSTORE_PASSWORD']
+DATABASE_URL = f"postgresql+psycopg://{os.environ['POSTGRES_USER']}:{os.environ['POSTGRES_PASSWORD']}@postgres:{os.environ['POSTGRES_PORT']}/{os.environ['POSTGRES_DB']}"
+GROUP_ID = os.environ.get('GROUP_ID') or f"{random.random()}"
 
 engine = create_engine(DATABASE_URL, pool_pre_ping=True)
-
-running = True
+Base.metadata.create_all(engine)
 
 
 def deserialize(msg):
-    """Decode a Kafka Avro container into event dictionaries."""
-    with DataFileReader(io.BytesIO(msg.value()), DatumReader()) as reader:
-        schema = json.loads(reader.meta["avro.schema"].decode("utf-8"))
-        schema_name = schema["name"]
-
-        return [
-            {"name": schema_name, "data": record}
-            for record in reader
-        ]
+    """Decode one Kafka message (an Avro container file) into event dicts."""
+    reader = DataFileReader(io.BytesIO(msg.value()), DatumReader())
+    try:
+        schema = json.loads(reader.meta.get('avro.schema').decode('utf-8'))
+        schema_name = schema['name']
+        return [{'name': schema_name, 'data': record} for record in reader]
+    finally:
+        reader.close()
+    
 
 
 def store(events):
-    """Process one Kafka message in a database transaction."""
+    """Insert the events of one message; invalid events are skipped individually."""
     inserted = 0
-
     with Session(engine) as session:
-        with session.begin():
+        try:
             for event in events:
                 try:
                     with session.begin_nested():
-                        saved = save_event(session, event)
-
-                    inserted += int(bool(saved))
-
-                except ValidationError as exc:
-                    print(
-                        f"Skipping invalid event {event.get('name')}: {exc}",
-                        flush=True,
-                    )
-
+                        inserted += save_event(session, event)
+                except ValidationError as e:
+                    print(f"Skipping invalid event {event.get('name')}: {e}")
+            session.commit()
+        except Exception:
+            session.rollback()
+            raise
     return inserted
 
 
-def signal_handler(signum, frame):
+config = {
+    'bootstrap.servers': BOOTSTRAP_SERVERS,
+    'group.id': GROUP_ID,
+    'auto.offset.reset': 'latest',
+    'enable.auto.commit': False,
+    'security.protocol': 'SSL',
+    'ssl.ca.location': SSL_LOCATION,
+    'ssl.keystore.location': SSL_KEYSTORE_LOC,
+    'ssl.keystore.password': SSL_KEYSTORE_PASSWORD,
+    'ssl.endpoint.identification.algorithm': 'none',
+}
+
+c = Consumer(config)
+running = True
+
+
+def signal_handler(sig, frame):
     global running
-    print("Stopping consumer safely...", flush=True)
+    print('EXITING SAFELY!')
     running = False
 
 
-def consume():
-    consumer = Consumer({
-        "bootstrap.servers": os.environ["BOOTSTRAP_SERVERS"],
-        "group.id": GROUP_ID,
-        "auto.offset.reset": "latest",
-        "enable.auto.commit": False,
-        "security.protocol": "SSL",
-        "ssl.ca.location": os.environ["SSL_CA_LOCATION"],
-        "ssl.keystore.location": os.environ["SSL_KEYSTORE_LOC"],
-        "ssl.keystore.password": os.environ["SSL_KEYSTORE_PASSWORD"],
-        "ssl.endpoint.identification.algorithm": "none",
-    })
+signal.signal(signal.SIGINT, signal_handler)
+signal.signal(signal.SIGTERM, signal_handler)
 
+
+def consume(topic: str = TOPIC):
+    c.subscribe([topic], on_assign=lambda _, p_list: print(p_list))
     try:
-        consumer.subscribe(
-            [TOPIC],
-            on_assign=lambda _, partitions: print(
-                f"Assigned partitions: {partitions}", flush=True
-            ),
-        )
-
         while running:
-            msg = consumer.poll(1.0)
-
+            msg = c.poll(1.0)
             if msg is None:
                 continue
-
             if msg.error():
-                raise RuntimeError(f"Kafka consumer error: {msg.error()}")
+                print("Consumer error: {}".format(msg.error()))
+                continue
 
-            events = deserialize(msg)
-            store(events)
-
-            # Commit only after processing and the DB commit succeed.
-            # Unexpected DB/Redis errors escape the loop without committing.
-            consumer.commit(message=msg, asynchronous=False)
-
+            try:
+                obj = deserialize(msg)
+                inserted = store(obj)
+            except ValidationError as e:
+                print(f"Skipping invalid message at offset {msg.offset()}: {e}")
+            c.commit(message=msg, asynchronous=False)
     finally:
-        consumer.close()
-
-
-def main():
-    signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
-
-    try:
-        Base.metadata.create_all(engine)
-        consume()
-    finally:
+        c.close()
         engine.dispose()
 
 
-if __name__ == "__main__":
-    main()
+if __name__ == '__main__':
+    try:
+        consume()
+    except KafkaException as e:
+        print(f"Kafka error: {e}")
+        sys.exit(1)
