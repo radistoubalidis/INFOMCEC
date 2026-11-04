@@ -4,4 +4,3 @@ __pycache__
 db/
 test.json
 redisdata
-redis-reset.sh

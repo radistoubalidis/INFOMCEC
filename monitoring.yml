@@ -32,4 +32,6 @@ services:
 volumes:
   prometheus-data:
 
-
+networks:
+  cec-assignment-group6:
+    driver: bridge
