@@ -25,4 +25,4 @@ The folder contains a FastAPI app that is already connected to the postgres db
 Docs: https://fastapi.tiangolo.com/
 
 ## Monitoring
-Run `docker-compose -f docker-compose.yml -f monitoring.yml up -d node-exporter prometheus`
+Run `docker compose -f docker-compose.yml -f monitoring.yml up -d node-exporter prometheus`

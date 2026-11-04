@@ -1,4 +1,4 @@
-# Every 15 s, Prometheus collects the VM's CPU and memory metrics from node-exporter.
+# Every 15 s prometheus collects the VM's CPU and memory metrics.
 global:
   scrape_interval: 15s
 
