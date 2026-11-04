@@ -1,7 +1,7 @@
 import os
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request, Query, HTTPException
+from fastapi import FastAPI, Request, Query, HTTPException, Response
 from psycopg_pool import ConnectionPool
 
 DATABASE_URL = os.environ["DATABASE_URL"]
@@ -45,9 +45,9 @@ def out_of_range(experiment_id: str=Query(alias="experiment-id")):
             raise HTTPException(status_code=404, detail=f"Experiment not found: {experiment_id}")
 
         data = conn.execute(
-            "SELECT timestamp, temperature FROM temperature_averages WHERE experiment_id = %s AND in_range = FALSE ORDER BY timestamp",
-        (experiment_id,),).fetchall()
-        return [{"timestamp": timestamp.timestamp(), "temperature": temperature} for timestamp, temperature in data]
+            "SELECT coalesce(json_agg(json_build_object('timestamp', extract(epoch FROM timestamp), 'temperature', temperature) ORDER BY timestamp), '[]')::text FROM temperature_averages WHERE experiment_id = %s AND in_range = FALSE",
+        (experiment_id,),).fetchone()
+        return Response(content=data[0], media_type="application/json")
 
 
 @app.get("/temperature")
@@ -68,6 +68,6 @@ def temperature(experiment_id: str=Query(alias="experiment-id"), start_time: flo
         experiment_started = row[0] 
 
         data = conn.execute(
-            "SELECT timestamp, temperature FROM temperature_averages WHERE experiment_id=%s AND timestamp > %s AND timestamp BETWEEN to_timestamp(%s) AND to_timestamp(%s) ORDER BY timestamp",
-            (experiment_id, experiment_started, start_time, end_time),).fetchall()
-        return [{"timestamp": timestamp.timestamp(), "temperature": temperature} for timestamp, temperature in data]
+            "SELECT coalesce(json_agg(json_build_object('timestamp', extract(epoch FROM timestamp), 'temperature', temperature) ORDER BY timestamp), '[]')::text FROM temperature_averages WHERE experiment_id=%s AND timestamp > %s AND timestamp BETWEEN to_timestamp(%s) AND to_timestamp(%s)",
+            (experiment_id, experiment_started, start_time, end_time),).fetchone()
+        return Response(content=data[0], media_type="application/json")
