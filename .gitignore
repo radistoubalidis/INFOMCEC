@@ -3,3 +3,4 @@ auth
 __pycache__
 db/
 test.json
+redisdata

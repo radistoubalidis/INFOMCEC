@@ -1,0 +1,10 @@
+# Every 15 s prometheus collects the VM's CPU and memory metrics.
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: infrastructure-costs
+    static_configs:
+      - targets: ["node-exporter:9100"]
+        labels:
+          instance: "group6:node-exporter"
